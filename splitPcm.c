@@ -133,7 +133,7 @@ int split_multi_channels_pcm_to_single_channel(wav_header_t header , char* multi
 			sub_channel_buffer[i][n]=multi_channel_buffer[k];
 			sub_channel_buffer[i][n+1] = multi_channel_buffer[k+1] ; 
 		}
-		a0 += 2 ; 
+		a0 += single_block_align ; 
 	}
 	return 0 ; 
 }

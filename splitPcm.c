@@ -25,14 +25,14 @@
 
 #define PERIOD_SIZE  1024 
 
-#define SINGLE_FILE "Channel_"
 #define AUDIO_FORMAT "wav"
 #define NAME_LENGTH  20
 
+static char* s_file_name = NULL ;
 
 struct wav_header
 {	
-	uint32_t riff_id;
+    uint32_t riff_id;
     uint32_t riff_sz;
     uint32_t riff_fmt;
     uint32_t fmt_id;
@@ -47,11 +47,18 @@ struct wav_header
     uint32_t data_sz;
 
 };
+struct header_info
+{
+	uint32_t block_align ; 
+	uint32_t sample_bit_width ; 
+	uint32_t num_channels ;	
+};
+typedef struct header_info  header_info_t ; 
 typedef struct wav_header wav_header_t ;
 
 int get_wav_channel(FILE * file) ; 
 int split_multiChannels_to_single_wav(char* wav_file) ;
-int split_multi_channels_pcm_to_single_channel(wav_header_t header , char* multi_channel_buffer,uint32_t size ,char ** sub_channel_buffer,uint32_t single_channel_size);
+int split_multi_channels_pcm_to_single_channel(header_info_t header_info , char* multi_channel_buffer,uint32_t size ,char ** sub_channel_buffer,uint32_t single_channel_size);
 int split_multiChannels_to_single_wav(char* wav_file);  
 
 
@@ -108,7 +115,7 @@ int  get_wav_header(FILE * wav_file,wav_header_t * wav_header)
 *  sub_channel_buffer：存放分解后多个单通道数据
 *  single_channel_size：分解后单通道数据长度
 */
-int split_multi_channels_pcm_to_single_channel(wav_header_t header , char* multi_channel_buffer,uint32_t size ,char ** sub_channel_buffer,uint32_t single_channel_size) 
+/*int split_multi_channels_pcm_to_single_channel(wav_header_t header , char* multi_channel_buffer,uint32_t size ,char ** sub_channel_buffer,uint32_t single_channel_size) 
 {
 	uint32_t block_align = header.block_align ;
 	uint32_t num_channels = header.num_channels ; 
@@ -136,6 +143,37 @@ int split_multi_channels_pcm_to_single_channel(wav_header_t header , char* multi
 		a0 += single_block_align ; 
 	}
 	return 0 ; 
+}*/
+
+int split_multi_channels_pcm_to_single_channel(header_info_t header_info, char* multi_channel_buffer,uint32_t size,char ** sub_channel_buffer,uint32_t single_channel_size)
+{
+	uint32_t block_align = header_info.block_align ;
+	uint32_t num_channels = header_info.num_channels ; 
+	uint16_t sample_bit_width = header_info.sample_bit_width >> 3 ; 
+	uint32_t single_block_nums = size /block_align ;
+	uint16_t single_block_align =   block_align/num_channels ; 
+	#ifdef DEBUG_TEST
+	printf("single_block_nums = %d\n",single_block_nums );
+	#endif 
+	uint32_t k = 0 ;
+	uint32_t a0 = 0 ; 
+	for(int i = 0 ; i < header_info.num_channels ; i++)
+	{
+		uint32_t n = 0 ;
+		for(int j = 1 ; j <= single_block_nums ;j++)
+		{
+			k = a0+single_block_align*num_channels* (j-1); 
+			n = single_block_align*(j-1) ;
+			#ifdef DEBUG_TEST
+			printf("n = %d   k = %d \n", n,k);
+			#endif 
+			sub_channel_buffer[i][n]=multi_channel_buffer[k];
+			sub_channel_buffer[i][n+1] = multi_channel_buffer[k+1] ; 
+		}
+		a0 += single_block_align ; 
+	}
+	return 0 ; 
+
 }
 
 /**
@@ -159,7 +197,7 @@ int split_multiChannels_to_single_wav(char* wav_file)
 	for(int f_index = 0 ; f_index < header.num_channels ; f_index ++)
 	{
 		char single_file_name [NAME_LENGTH] ; 
-		uint32_t len = sprintf(single_file_name,"Channel_%d.wav",f_index+1);
+		uint32_t len = sprintf(single_file_name,"%s%d.wav",s_file_name,f_index+1);
 		channel_files[f_index] = fopen(single_file_name,"wb");
 		if(!channel_files[f_index])
 		{
@@ -183,23 +221,26 @@ int split_multiChannels_to_single_wav(char* wav_file)
 			printf("malloc mem failed\n");
 			return -1 ; 
 		}
-
-		fseek(channel_files[i],sizeof(struct wav_header),SEEK_SET);//预留文件头空间
+        //预留文件头空间
+		fseek(channel_files[i],sizeof(struct wav_header),SEEK_SET);
 	}
 	
 
 
 	struct wav_header header_one ; 
 	memcpy(&header_one,&header,sizeof(struct wav_header)) ;
+	header_info_t header_info ; 
+	header_info.block_align = header.block_align ; 
+	header_info.num_channels = header.num_channels ; 
+	header_info.sample_bit_width = header.bits_per_sample ; 
 
 	uint32_t read_size =fread(multi_buffer,1,size,file) ; 
 	uint32_t write_size = 0 ; 
 	printf("read_size =%d \n",read_size);
-	clock_t start , end ; 
 	while(read_size)
 	{	
-		split_multi_channels_pcm_to_single_channel(header,multi_buffer,size,sub_buffers,single_channel_size) ;
-		for( int index = 0 ; index < header.num_channels ; index++)
+		split_multi_channels_pcm_to_single_channel(header_info,multi_buffer,size,sub_buffers,single_channel_size) ;
+		for( int index = 0 ; index < header_info.num_channels ; index++)
 		{
 			write_size=fwrite(sub_buffers[index],1,single_channel_size,channel_files[index]);
 			if(write_size!= single_channel_size)
@@ -210,6 +251,7 @@ int split_multiChannels_to_single_wav(char* wav_file)
 		read_size =fread(multi_buffer,1,size,file) ;
 
 	}
+	//写数据完毕，每个通道pcm数据添加文件头
 	header_one.num_channels = 1 ; 
 	header_one.block_align = header_one.bits_per_sample >> 3 ; 
 	header_one.byte_rate = (header_one.bits_per_sample >> 3)*header_one.sample_rate ; 
@@ -226,8 +268,6 @@ int split_multiChannels_to_single_wav(char* wav_file)
 		,header_one.num_channels  ,header_one.block_align,header_one.bits_per_sample ,header_one.sample_rate,header_one.data_sz);
     printHeader(header_one) ; 
     
-
-   
     printf("extract finished !\n");
 
 	free(multi_buffer) ; 
@@ -264,8 +304,16 @@ int main(int argsc, char ** argsv)
 	}
 	
 	printf("file name =  %s \n ",argsv[1]);//argsv[1]
+	uint32_t filename_len = strlen(argsv[1]);
+	char* filename = (char*)malloc(filename_len) ; 
+	memcpy(filename,argsv[1],filename_len);
+	s_file_name= strtok(filename,".");
 
+	printf("%s\n",s_file_name );
+	
 	split_multiChannels_to_single_wav(argsv[1]) ; 
+
+	free(filename) ; 
 	return 0 ; 
 }
 
